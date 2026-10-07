@@ -190,6 +190,28 @@ let AC, master, noiseBuf, muted = false, nextT = 0, step = 0, beatOn = false;
 const BPM = 112, S16 = 60 / BPM / 4;
 const NOTE = { E2:82.41, G2:98, A2:110, B2:123.47, C3:130.81, D3:146.83, E3:164.81 };
 const BASS = ['E2',0,'E3',0, 0,'E2',0,'G2', 0,'A2',0,0, 'B2',0,'D3','E3', 'A2',0,'A2','C3', 0,'A2',0,'E2', 0,'G2',0,'G2', 'B2',0,'D3',0];
+// Phones: iPhones mute web-game sound when the silent switch is on, and browsers only allow
+// sound after a tap. unlockAudio() runs on a tap and switches the page to "media playback" mode.
+let silentEl = null;
+function silentWavUrl() {
+  const n = 4410, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf), s = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  s(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); s(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 44100, true); v.setUint32(28, 88200, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); s(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+function unlockAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  if (!silentEl) {
+    silentEl = document.createElement('audio'); silentEl.src = silentWavUrl(); silentEl.loop = true;
+    silentEl.setAttribute('playsinline', ''); silentEl.setAttribute('webkit-playsinline', '');
+  }
+  const p = silentEl.play(); if (p && p.catch) p.catch(() => {});
+  initAudio();
+  if (AC.state !== 'running') AC.resume();
+  // play one silent sample inside the tap so the audio engine is definitely unlocked
+  const b = AC.createBufferSource(); b.buffer = AC.createBuffer(1, 1, 22050); b.connect(AC.destination); b.start(0);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && AC && beatOn) { AC.resume(); if (silentEl) silentEl.play().catch(() => {}); } });
 function initAudio() {
   if (AC) return;
   AC = new (window.AudioContext || window.webkitAudioContext)();
@@ -246,12 +268,12 @@ function doKick() {
   if (state !== 'play' || kickT < KICK_LEN * 0.85) return;
   kickT = 0; sfx.swoosh(); bads.forEach(b => b.hitThisKick = false);
 }
-addEventListener('pointerdown', e => { if (e.target === cv) doKick(); });
-$('kickBtn').addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); doKick(); });
+addEventListener('pointerdown', e => { if (AC && AC.state !== 'running') unlockAudio(); if (e.target === cv) doKick(); });
+$('kickBtn').addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); if (AC && AC.state !== 'running') unlockAudio(); doKick(); });
 addEventListener('keydown', e => { if (['Space', 'ArrowRight', 'KeyK', 'Enter'].includes(e.code)) { e.preventDefault(); doKick(); } });
 
 $('startBtn').onclick = e => {
-  e.target.blur(); initAudio(); AC.resume(); beatOn = true;
+  e.target.blur(); unlockAudio(); beatOn = true;
   $('title').classList.remove('show'); $('hud').classList.add('show'); $('kickBtn').classList.add('show');
   wins = 0; lives = 3; kicks = 0; combo = 0; bads = []; goods = []; bossDone = {}; badT = 1.2; goodT = 0.8;
   state = 'play'; updateHud(); popup("KICK OUT THE NEGATIVITY! 🦵");
